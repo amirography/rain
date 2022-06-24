@@ -3,135 +3,50 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 )
-
-var config, _ = os.UserConfigDir()
 
 func main() {
 	autorun()
 }
 
 func autorun() {
-	var autorunWg sync.WaitGroup
-
-	autorunWg.Add(2)
-
-	windowManager(&autorunWg)
-
-	proxyErr := proxy(&autorunWg)
-	if proxyErr != nil {
-		fmt.Println(proxyErr)
-	}
-
-	autorunWg.Wait()
-
-}
-func windowManager(autorunWg *sync.WaitGroup) {
-	defer autorunWg.Done()
-
-	riverErr := river()
-	if riverErr != nil {
-		log.Panicln("Err:", "windowManager failed")
-	}
-	var windowManagerWG sync.WaitGroup
-
-	windowManagerWG.Add(4)
-	go swaybg(&windowManagerWG)
-	go waybar(&windowManagerWG)
-	go mako(&windowManagerWG)
-	go setDbus(&windowManagerWG)
-
-	windowManagerWG.Wait()
-
+	var wgAR sync.WaitGroup
+	wgAR.Add(2)
+	go river(&wgAR)
+	go proxy(&wgAR)
+	wgAR.Wait()
 }
 
-func river() error {
-	err := exec.Command("river").Run()
+func river(wgAR *sync.WaitGroup) {
+	defer wgAR.Done()
+	killProcess("river")
+	err := exec.Command("river").Start()
 
 	if err != nil {
-		return fmt.Errorf(fmt.Sprintln("Err:", "river failed.", err))
+		log.Println(fmt.Errorf(fmt.Sprintln("Err:", "river failed.", err)))
 	}
-
-	return nil
 }
 
-func waybar(windowManagerWG *sync.WaitGroup) {
-	defer windowManagerWG.Done()
-	killErr := exec.Command(
-		"killall",
-		"waybar",
-	).Run()
-	_ = killErr
+func proxy(wgAR *sync.WaitGroup) {
+	defer wgAR.Done()
 
-	err := exec.Command(
-		"waybar",
-		"-c",
-		config+"/river/waybar/config.json",
-		"-s",
-		config+"/river/waybar/style.css",
-	).Run()
+	err := tor()
 	if err != nil {
-		fmt.Println(fmt.Errorf(fmt.Sprintln("Err:", "waybar failed.", err)))
+		log.Println(fmt.Errorf(fmt.Sprintln("Err:", "proxy failed.", err)))
 	}
-
-}
-
-func swaybg(windowManagerWG *sync.WaitGroup) {
-	defer windowManagerWG.Done()
-
-	killErr := exec.Command(
-		"killall",
-		"swaybg",
-	).Run()
-	_ = killErr
-
-	err := exec.Command("swaybg",
-		"-m",
-		"fill",
-		"-i",
-		config+"/wallpaper").Run()
+	err = clash()
 	if err != nil {
-		log.Println(fmt.Errorf(fmt.Sprintln("Err:", "waybar failed.", err)))
+		log.Println(fmt.Errorf(fmt.Sprintln("Err:", "proxy failed.", err)))
 	}
 
-}
-func mako(windowManagerWG *sync.WaitGroup) {
-	defer windowManagerWG.Done()
-
-	err := exec.Command("mako",
-		"--default-timeout",
-		"5000",
-		"--background-color",
-		"#"+"0xE0E0E0",
-		"--border-color",
-		"#"+"0xE0E0E0",
-		"--border-size",
-		"2",
-		"--font",
-		"monospace",
-		"--padding",
-		"20",
-		"--width",
-		"350",
-	).Run()
-	if err != nil {
-		log.Println(fmt.Errorf(fmt.Sprintln("Err:", "mako failed.", err)))
-	}
-
-}
-func proxy(autorunWg *sync.WaitGroup) error {
-	defer autorunWg.Done()
-	torErr := tor()
-	if torErr != nil {
-		return fmt.Errorf(fmt.Sprintln("Err:", "proxy failed.", torErr))
-	}
-	return nil
 }
 func tor() error {
-	err := exec.Command("tor").Run()
+	killProcess("tor")
+	err := exec.Command("tor", "--RunAsDaemon", "1").Start()
 
 	if err != nil {
 		return fmt.Errorf(fmt.Sprintln("Err:", "tor failed.", err))
@@ -139,19 +54,35 @@ func tor() error {
 
 	return nil
 }
-func setDbus(windowManagerWG *sync.WaitGroup) {
-	defer windowManagerWG.Done()
-	err := exec.Command(
-		"dbus-update-activation-environment",
-		"SEATD_SOCK",
-		"DISPLAY",
-		"WAYLAND_DISPLAY",
-		"XDG_SESSION_TYPE",
-		"XDG_CURRENT_DESKTOP",
-	).Run()
+func clash() error {
+	killProcess("clash")
+	err := exec.Command("clash").Start()
 
 	if err != nil {
-		log.Println(fmt.Errorf(fmt.Sprintln("Err:", "setting dbus failed.", err)))
+		return fmt.Errorf(fmt.Sprintln("Err:", "Clash failed.", err))
 	}
 
+	return nil
+}
+
+func killProcess(procName string) {
+
+	p, err := exec.Command("pidof", procName).Output()
+	if err != nil {
+		return
+	}
+	pp := strings.Split(string(p), " ")
+	if len(pp[0]) == 0 {
+		return
+	}
+
+	pid, err := strconv.Atoi(pp[0])
+	if err != nil {
+		log.Panicln("Err:", "trouble converting output of pidof:", "\n", string(p))
+	}
+
+	killErr := exec.Command("kill", fmt.Sprint(pid)).Run()
+	if killErr != nil {
+		log.Println("Err:", "having trouble killing", procName)
+	}
 }
